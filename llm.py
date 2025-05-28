@@ -1,0 +1,85 @@
+import time
+from typing import Any
+
+import google.genai.errors
+import google.genai.types
+import httpx
+import openai
+import tiktoken
+from google import genai
+
+
+def get_ai_response(
+    prompt: str,
+    model: str,
+    client: openai.OpenAI | genai.Client,
+    temperature: float,
+    max_output_tokens: int,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    if metadata is None:
+        metadata = {}
+
+    if isinstance(client, openai.OpenAI):
+        while True:
+            try:
+                response = client.responses.create(
+                    model=model,
+                    input=[{"role": "user", "content": prompt}],
+                    metadata=metadata,  # type: ignore
+                    max_output_tokens=max_output_tokens,
+                    temperature=temperature,
+                    store=True,
+                )
+            except openai.APIError as e:
+                print(getattr(e, "message", str(e)))
+                time.sleep(10)
+            else:
+                return response.output_text
+
+    elif isinstance(client, genai.Client):
+        if model.startswith("gemini-2.5-flash"):
+            thinking_config = google.genai.types.ThinkingConfig(
+                thinking_budget=0,
+            )
+        else:
+            thinking_config = None
+
+        while True:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=google.genai.types.GenerateContentConfig(
+                        http_options=google.genai.types.HttpOptions(
+                            timeout=180000,
+                        ),
+                        max_output_tokens=max_output_tokens,
+                        temperature=temperature,
+                        thinking_config=thinking_config,
+                    ),
+                )
+            except google.genai.errors.APIError as e:
+                print(getattr(e, "message", str(e)))
+                time.sleep(10)
+            except httpx.HTTPError:
+                time.sleep(10)
+            else:
+                return response.text or ""
+
+    msg = f"Unknown client type: {type(client)}"
+    raise ValueError(msg)
+
+
+def count_tokens(text: str, client: Any, model: str) -> int:
+    if isinstance(client, openai.OpenAI):
+        if model.startswith("gpt-4.1"):
+            encoding = tiktoken.get_encoding("o200k_base")
+        else:
+            encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    elif isinstance(client, genai.Client):
+        return client.models.count_tokens(model=model, contents=text).total_tokens or 0
+
+    msg = f"Unknown client type: {type(client)}"
+    raise ValueError(msg)

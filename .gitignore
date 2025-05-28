@@ -1,5 +1,11 @@
-env
+venv/
+outputs/
+wandb/
+__pycache__/
 *.zip
 *.csv
+*.json
+*.txt
 
 preview.png
+*.synctex.gz

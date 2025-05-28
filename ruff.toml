@@ -36,3 +36,4 @@ select = [
 
 [lint.isort]
 known-local-folder = ["tests"]
+known-third-party = ["wandb"]
