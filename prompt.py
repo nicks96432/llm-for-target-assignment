@@ -18,18 +18,19 @@ class PromptResult:
     prompt: str
     response: str | None
     step: int
-    destroyed_ships: float
-    total_damage: float
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class OptimizePromptResult(PromptResult):
     assignment: list[int]
+    destroyed_ships: float
+    total_damage: float
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class HeuristicGeneratePromptResult(PromptResult):
     heuristic: str
+    average_destroy_rate: float
 
 
 def get_optimizer_prompt(
@@ -128,7 +129,7 @@ def get_optimizer_prompt(
 
 def get_heuristic_generator_prompt(
     sampled_results: Sequence[HeuristicGeneratePromptResult],
-    dataset: Dataset,
+    example_dataset: Dataset,
     method: str,
     detailed_table: bool = False,
 ) -> str:
@@ -143,29 +144,24 @@ def get_heuristic_generator_prompt(
     """
 
     prompt = (
-        f"There are {len(dataset.ships_xy)} battle ships invading the island, and "
-        f"{dataset.require_missles.shape[1]} types of missles are available for "
-        "defense.\n\n"
+        "There are battle ships invading the island, and multiple types of missles are "
+        "available for defense.\n\n"
     )
 
     prompt += (
-        "Below is a list of available missiles, where each entry specifies the "
+        "Below is an example list of missiles, where each entry specifies the "
         "missile type and the IDs of the ships it can target:\n"
     )
 
-    missles_iter = itertools.islice(dataset.missles, 3)
+    missles_iter = itertools.islice(example_dataset.missles, 3)
     if detailed_table:
-        missles_iter = iter(dataset.missles)
+        missles_iter = iter(example_dataset.missles)
 
     for i, missle in enumerate(missles_iter, start=1):
         prompt += f"{i}: type: {missle.type}, targets: {missle.available_targets}\n"
 
-    if not detailed_table and len(dataset.missles) > 3:
+    if not detailed_table and len(example_dataset.missles) > 3:
         prompt += "...\n"
-        prompt += (
-            f"{len(dataset.missles)}: type: {dataset.missles[-1].type}, "
-            f"targets: {dataset.missles[-1].available_targets}\n"
-        )
 
     prompt += (
         "\n"
@@ -175,20 +171,21 @@ def get_heuristic_generator_prompt(
         "missile type:\n"
     )
 
-    ship_types_iter = itertools.islice(dataset.ship_types, 3)
+    ship_types_iter = itertools.islice(example_dataset.ship_types, 3)
     if detailed_table:
-        ship_types_iter = iter(dataset.ship_types)
+        ship_types_iter = iter(example_dataset.ship_types)
 
     for i, ship in enumerate(ship_types_iter, start=1):
-        prompt += (
-            f"{i}: {' '.join(str(x) for x in dataset.require_missles[ship - 1])}\n"
+        require_missles_str = " ".join(
+            str(x) for x in example_dataset.require_missles[ship - 1]
         )
+        prompt += f"{i}: {require_missles_str}\n"
 
-    if not detailed_table and len(dataset.ship_types) > 3:
+    if not detailed_table and len(example_dataset.ship_types) > 3:
         prompt += "...\n"
         prompt += (
-            f"{len(dataset.ship_types)}: "
-            f"{' '.join(str(x) for x in dataset.require_missles[-1])}\n"
+            f"{len(example_dataset.ship_types)}: "
+            f"{' '.join(str(x) for x in example_dataset.require_missles[-1])}\n"
         )
 
     prompt += textwrap.dedent(
@@ -223,10 +220,8 @@ def get_heuristic_generator_prompt(
             "\n"
             "Below is some examples of a previously implemented heuristic function for "
             "missile assignment, along with its performance metrics. The performance "
-            "is measured by the number of ships destroyed—where a higher count is "
-            "better. In the case of a tie, the total inflicted damage is used as a "
-            "secondary criterion. If a missile has no available targets, it should be "
-            "assigned to 0 (i.e., no assignment).\n\n"
+            "is measured by the average destroyed ship ratio. If a missile has no "
+            "available targets, it should be assigned to 0 (i.e., no assignment).\n\n"
         )
 
         old_value_pairs_substr = ""
@@ -235,7 +230,7 @@ def get_heuristic_generator_prompt(
                 f"""
 ```
 {result.heuristic}```
-destroyed ships: {result.destroyed_ships}, total damage: {result.total_damage:.4f}
+average ship destroy rate: {result.average_destroy_rate}
 """
             )
 
@@ -291,7 +286,9 @@ def sample_best[T](ascending_items: Sequence[T], n_best=10) -> list[T]:
     return list(ascending_items)[-n_best:]
 
 
-def sample_uniform[T](items: Sequence[T], n_sample=10) -> list[T]:
+def sample_uniform[T](
+    items: Sequence[T], rng: numpy.random.Generator, n_sample=10
+) -> list[T]:
     """
     Gets `n_sample` items randomly from a sequence.
 
@@ -299,6 +296,8 @@ def sample_uniform[T](items: Sequence[T], n_sample=10) -> list[T]:
     ----------
     items : Sequence[T]
         items to sample from
+    rng : numpy.random.Generator
+        random number generator
     n_sample : int, optional
         number of items to sample, by default 10
 
@@ -310,23 +309,36 @@ def sample_uniform[T](items: Sequence[T], n_sample=10) -> list[T]:
 
     n_sample = min(n_sample, len(items))
 
-    return numpy.random.choice(items, n_sample, replace=False).tolist()  # type: ignore
+    return rng.choice(items, n_sample, replace=False).tolist()  # type: ignore
 
 
 def sample_gumbel_top_k[P: PromptResult](
-    old_results: Sequence[P], k=10, tau=1.0, damage_factor=0.1
+    old_results: Sequence[P],
+    rng: numpy.random.Generator,
+    k=10,
+    tau=1.0,
+    damage_factor=0.1,
 ) -> list[P]:
     if k > len(old_results):
         return list(old_results)
 
-    scores = numpy.array(
-        [result.destroyed_ships for result in old_results],
-        dtype=numpy.float64,
-    ) + (numpy.array([result.total_damage for result in old_results]) * damage_factor)
+    scores = []
+    if all(
+        (hasattr(result, "destroyed_ships") and hasattr(result, "total_damage"))
+        for result in old_results
+    ):
+        for result in old_results:
+            assert isinstance(result, OptimizePromptResult)
+            scores.append(result.destroyed_ships + result.total_damage * damage_factor)
+    else:
+        for result in old_results:
+            assert isinstance(result, HeuristicGeneratePromptResult)
+            scores.append(result.average_destroy_rate)
 
+    scores = numpy.array(scores)
     scores = (scores - scores.mean()) / (scores.std() + numpy.finfo(numpy.float32).eps)
 
-    gumbel_noise = numpy.random.gumbel(0.0, 1.0, len(scores))
+    gumbel_noise = rng.gumbel(0.0, 1.0, len(scores))
     noisy_scores = (scores / tau) + gumbel_noise
 
     top_k_indices = numpy.argpartition(noisy_scores, -k)[-k:]
@@ -336,15 +348,15 @@ def sample_gumbel_top_k[P: PromptResult](
 
 
 def get_sample_method(
-    method: str, n_sample: int, gumbel_tau: float
+    rng: numpy.random.Generator, method: str, n_sample: int, gumbel_tau: float
 ) -> Callable[[Sequence[PromptResult]], list[PromptResult]]:
     match method:
         case "best":
             return partial(sample_best, n_best=n_sample)
         case "uniform":
-            return partial(sample_uniform, n_sample=n_sample)
+            return partial(sample_uniform, rng=rng, n_sample=n_sample)
         case "gumbel_top_k":
-            return partial(sample_gumbel_top_k, k=n_sample, tau=gumbel_tau)
+            return partial(sample_gumbel_top_k, rng=rng, k=n_sample, tau=gumbel_tau)
         case _:
             msg = f"Unknown sample method: {method}"
             raise ValueError(msg)

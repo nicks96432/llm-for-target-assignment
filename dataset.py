@@ -26,6 +26,8 @@ from shapely import Point, Polygon, shortest_line
 from shapely.plotting import plot_points, plot_polygon
 from tqdm.auto import tqdm
 
+from config import DatasetConfig
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(stream=sys.stdout, level=logging.WARNING)
 
@@ -48,46 +50,6 @@ def geometry_to_xy(df: GeoDataFrame) -> GeoDataFrame:
     df = df.assign(x=df.geometry.x, y=df.geometry.y)
 
     return df
-
-
-@dataclasses.dataclass(frozen=True)
-class Config:
-    """
-    A dataset configuration.
-
-    Parameters
-    ----------
-    cls : type[Self]
-        dataset class
-    n_ship : int, optional
-        total ship count, by default 20
-    n_turret : int, optional
-        total turret count, by default 20
-    n_missle : int, optional
-        total missle count, by default 100
-    n_ship_type : int, optional
-        total ship type count, by default 10
-    n_missle_type : int, optional
-        total missle type count, by default 2
-    max_ship_distance : int, optional
-        maximum distance between ships and coast, by default 50000
-    max_turret_coast_distance : int, optional
-        maximum distance between turrets and coast, by default 3000
-    seed : int, optional
-        random seed, by default 0
-    twd97 : bool, optional
-        use TWD97 coordinate system, by default True
-    """
-
-    n_ship: int = 20
-    n_turret: int = 20
-    n_missle: int = 100
-    n_ship_type: int = 10
-    n_missle_type: int = 2
-    max_ship_coast_distance: int = 50000
-    max_turret_coast_distance: int = 3000
-    seed: int = 0
-    twd97: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -176,12 +138,11 @@ class Dataset:
         """
 
         TAIWAN_MAP_ZIP_URL = (
-            "https://data.moi.gov.tw/MoiOD/System/DownloadFile.aspx"
-            "?DATA=72874C55-884D-4CEA-B7D6-F60B0BE85AB0"
+            "https://data.moi.gov.tw/MoiOD/System/DownloadFile.aspx?DATA=72874C55-884D-4CEA-B7D6-F60B0BE85AB0"
         )
-        TAIWAN_MAP_ZIP_FILENAME = "直轄市、縣(市)界線檔(TWD97經緯度)1130719.zip"
+        TAIWAN_MAP_ZIP_FILENAME = "直轄市、縣(市)界線1140318.zip"
         TAIWAN_MAP_ZIP_SHA256 = (
-            "292b1fdcc5dcd9e4e9ddbeb49599224c0222268fd6f9d7360247310aa3082ad0"
+            "9ff4d337e03a711d7e17caaf4d0c46a0fe2c6bd3660b321a2e35123030d8491c"
         )
 
         if cache:
@@ -251,7 +212,7 @@ class Dataset:
         GeoDataFrame
             Taiwan island polygon
         """
-        TAIWAN_MAP_FILENAME = "COUNTY_MOI_1130718.shp"
+        TAIWAN_MAP_FILENAME = "COUNTY_MOI_1140318.shp"
         with Dataset._download_taiwan_map_data(cache) as data_zip:
             taiwan_map: GeoDataFrame = geopandas.read_file(
                 f"zip://{data_zip.name}/{TAIWAN_MAP_FILENAME}"
@@ -523,7 +484,7 @@ class Dataset:
     @classmethod
     def generate(
         cls: type[Self],
-        config: Config,
+        config: DatasetConfig,
         output_dir: str | None = None,
         preview: bool = False,
     ) -> Self:

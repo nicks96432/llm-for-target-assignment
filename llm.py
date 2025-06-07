@@ -8,13 +8,13 @@ import openai
 import tiktoken
 from google import genai
 
+from config import LLMConfig
+
 
 def get_ai_response(
-    prompt: str,
-    model: str,
     client: openai.OpenAI | genai.Client,
-    temperature: float,
-    max_output_tokens: int,
+    prompt: str,
+    config: LLMConfig,
     metadata: dict[str, Any] | None = None,
 ) -> str:
     if metadata is None:
@@ -24,21 +24,21 @@ def get_ai_response(
         while True:
             try:
                 response = client.responses.create(
-                    model=model,
+                    model=config.model,
                     input=[{"role": "user", "content": prompt}],
                     metadata=metadata,  # type: ignore
-                    max_output_tokens=max_output_tokens,
-                    temperature=temperature,
+                    max_output_tokens=config.max_output_tokens,
+                    temperature=config.temperature,
                     store=True,
+                    timeout=config.timeout,
                 )
             except openai.APIError as e:
                 print(getattr(e, "message", str(e)))
                 time.sleep(10)
             else:
                 return response.output_text
-
     elif isinstance(client, genai.Client):
-        if model.startswith("gemini-2.5-flash"):
+        if config.model.startswith("gemini-2.5-flash"):
             thinking_config = google.genai.types.ThinkingConfig(
                 thinking_budget=0,
             )
@@ -48,14 +48,14 @@ def get_ai_response(
         while True:
             try:
                 response = client.models.generate_content(
-                    model=model,
+                    model=config.model,
                     contents=prompt,
                     config=google.genai.types.GenerateContentConfig(
                         http_options=google.genai.types.HttpOptions(
-                            timeout=180000,
+                            timeout=config.timeout * 1000
                         ),
-                        max_output_tokens=max_output_tokens,
-                        temperature=temperature,
+                        max_output_tokens=config.max_output_tokens,
+                        temperature=config.temperature,
                         thinking_config=thinking_config,
                     ),
                 )

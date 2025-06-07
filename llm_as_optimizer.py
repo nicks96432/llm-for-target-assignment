@@ -15,24 +15,13 @@ from llm import count_tokens, get_ai_response
 from prompt import OptimizePromptResult, get_optimizer_prompt, get_sample_method
 
 
-def can_hit_ship(missle: Missle, ship_id: int, dataset: Dataset) -> bool:
-    return (
-        ship_id > 0
-        and dataset.in_range[missle.type - 1, missle.turret_id - 1, ship_id - 1]
-        and dataset.require_missles[
-            dataset.ship_types[ship_id - 1] - 1, missle.type - 1
-        ]
-        != -1
-    )
-
-
 def evaluate_destroyed_ships(
     assignment: Sequence[int],
     dataset: Dataset,
 ) -> tuple[int, float]:
     damage_on_ship = numpy.zeros(len(dataset.ships_xy), dtype=numpy.float64)
     for i, missle in enumerate(dataset.missles):
-        if can_hit_ship(missle, assignment[i], dataset):
+        if dataset.can_hit_ship(missle, assignment[i]):
             damage_on_ship[assignment[i] - 1] += dataset.missle_damages[
                 dataset.ship_types[assignment[i] - 1] - 1, missle.type - 1
             ]
@@ -140,7 +129,7 @@ def init_nearest_first(dataset: Dataset) -> list[OptimizePromptResult]:
 def main(args: dict):
     dataset = Dataset.load_dir(args["data_dir"])
 
-    numpy.random.seed(args["seed"])
+    rng = numpy.random.default_rng(args["seed"])
 
     match args["init_method"]:
         case "random":
@@ -160,7 +149,7 @@ def main(args: dict):
         )
 
     sample_func = get_sample_method(
-        args["sample_method"], args["n_example"], args["gumbel_tau"]
+        rng, args["sample_method"], args["n_example"], args["gumbel_tau"]
     )
 
     get_prompt = partial(
@@ -240,7 +229,7 @@ def main(args: dict):
 
         old_results.append(
             OptimizePromptResult(
-                prompt, response, step, metric[0], metric[1], assignment
+                prompt, response, step, assignment, metric[0], metric[1]
             )
         )
         old_results.sort(key=lambda r: (r.destroyed_ships, r.total_damage))
