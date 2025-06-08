@@ -4,8 +4,6 @@ Generate dataset for training.
 
 import dataclasses
 import hashlib
-import inspect
-import json
 import logging
 import os
 import pathlib
@@ -137,9 +135,7 @@ class Dataset:
             if sha256 checksum does not match
         """
 
-        TAIWAN_MAP_ZIP_URL = (
-            "https://data.moi.gov.tw/MoiOD/System/DownloadFile.aspx?DATA=72874C55-884D-4CEA-B7D6-F60B0BE85AB0"
-        )
+        TAIWAN_MAP_ZIP_URL = "https://data.moi.gov.tw/MoiOD/System/DownloadFile.aspx?DATA=72874C55-884D-4CEA-B7D6-F60B0BE85AB0"
         TAIWAN_MAP_ZIP_FILENAME = "直轄市、縣(市)界線1140318.zip"
         TAIWAN_MAP_ZIP_SHA256 = (
             "9ff4d337e03a711d7e17caaf4d0c46a0fe2c6bd3660b321a2e35123030d8491c"
@@ -485,7 +481,7 @@ class Dataset:
     def generate(
         cls: type[Self],
         config: DatasetConfig,
-        output_dir: str | None = None,
+        output_dir: str | pathlib.Path | None = None,
         preview: bool = False,
     ) -> Self:
         """
@@ -495,6 +491,8 @@ class Dataset:
         ----------
         cls : type[Self]
             dataset class
+        config : DatasetConfig
+            dataset configuration
         output_dir : str | None, optional
             dataset output directory, by default None
         preview : bool, optional
@@ -504,10 +502,11 @@ class Dataset:
         -------
         Self
             the generated dataset
-        """
 
-        sig, args = inspect.signature(cls.generate), locals()
-        args = {param.name: args[param.name] for param in sig.parameters.values()}
+        Notes
+        -----
+        If output_dir does not exist, it will be created.
+        """
 
         rng = random.Generator(random.PCG64DXSM(config.seed))
 
@@ -559,7 +558,7 @@ class Dataset:
                 pyplot.savefig(output_path / "preview.png")
 
             with open(output_path / "args.json", "w", encoding="utf-8") as f:
-                json.dump(args, f, indent=2, ensure_ascii=False)
+                f.write(config.model_dump_json(indent=2))
 
         turrets.drop("geometry", axis=1, inplace=True)
         ships.drop("geometry", axis=1, inplace=True)

@@ -1,13 +1,15 @@
+import concurrent.futures
 import inspect
-import traceback
+import math
+import pathlib
 from functools import partial
-from typing import Any
 
 import numpy
 import openai
 import tiktoken
 import wandb
 from google import genai
+from tqdm.auto import tqdm
 
 from config import DatasetConfig, HeuristicGenerationConfig
 from dataset import Dataset
@@ -22,7 +24,7 @@ from prompt import (
 
 def extract_heuristic_code(string: str) -> str:
     """
-    Removes the first line and the last line of the string.
+    Gets the last code block in the string.
 
     Parameters
     ----------
@@ -32,13 +34,18 @@ def extract_heuristic_code(string: str) -> str:
     Returns
     -------
     str
-        the extracted string
+        the extracted python code
     """
 
-    return string.partition("\n")[2].rpartition("\n")[0] + "\n"
+    parts = string.rsplit("```", 2)
+
+    if len(parts) >= 2:
+        return parts[-2].partition("\n")[2]
+
+    return ""
 
 
-def example_heuristic(dataset: Dataset, ship_health: list[float], i: int) -> int:
+def heuristic(dataset: Dataset, ship_health: list[float], i: int) -> int:
     missle = dataset.missles[i - 1]
 
     if not missle.available_targets:
@@ -47,12 +54,9 @@ def example_heuristic(dataset: Dataset, ship_health: list[float], i: int) -> int
     return missle.available_targets[0]
 
 
-def main(config: HeuristicGenerationConfig):
-    rng = numpy.random.default_rng(config.seed)
-
-    datasets = []
-    for seed in range(config.n_dataset):
-        dataset_config = DatasetConfig.model_validate({
+def generate_dataset(rng: numpy.random.Generator, seed: int) -> Dataset:
+    return Dataset.generate(
+        DatasetConfig.model_validate({
             **{
                 field: rng.integers(
                     getattr(config.dataset_gen_low, field),
@@ -69,9 +73,28 @@ def main(config: HeuristicGenerationConfig):
                 ]
             },
             "seed": seed,
-        })
+        }),
+        pathlib.Path.cwd() / "datasets" / str(seed),
+        preview=True,
+    )
 
-        datasets.append(Dataset.generate(dataset_config))
+
+def main(config: HeuristicGenerationConfig):
+    rng = numpy.random.default_rng(config.seed)
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        datasets = list(
+            tqdm(
+                executor.map(
+                    Dataset.load_dir,
+                    iter(
+                        pathlib.Path.cwd() / "datasets" / str(i)
+                        for i in range(config.n_dataset)
+                    ),
+                ),
+                total=config.n_dataset,
+            )
+        )
 
     example_dataset = Dataset.load_dir(config.prompt.example_dataset_dir)
 
@@ -88,13 +111,15 @@ def main(config: HeuristicGenerationConfig):
     old_results: list[HeuristicGeneratePromptResult] = []
 
     if config.debug:
-        metric = evaluate_heuristic(example_heuristic, datasets)
+        code = inspect.getsource(heuristic)
+        print(code)
+        metric = evaluate_heuristic(code, datasets)
         old_results.append(
             HeuristicGeneratePromptResult(
                 prompt="",
                 response="",
                 step=0,
-                heuristic=inspect.getsource(example_heuristic),
+                heuristic=code,
                 average_destroy_rate=metric,
             )
         )
@@ -102,7 +127,7 @@ def main(config: HeuristicGenerationConfig):
             f"""----------------------------prompt------------------------------
 {get_prompt(old_results, example_dataset)}
 ----------------------------------------------------------------
-average destroy rate: {metric}"""
+average ship destroy rate: {metric}"""
         )
         return
 
@@ -125,7 +150,7 @@ average destroy rate: {metric}"""
     match config.llm.provider:
         case "openai":
             client_cls = openai.OpenAI
-        case "google":
+        case "genai":
             client_cls = genai.Client
         case _:
             msg = f"Unknown model provider: {config.llm.provider}"
@@ -156,27 +181,24 @@ average destroy rate: {metric}"""
             print("Invalid heuristic.")
             continue
 
-        namespace: dict[str, Any] = {"Dataset": Dataset}
-        try:
-            exec(heuristic_code, namespace)
-            metric = evaluate_heuristic(namespace["heuristic"], datasets)
-            old_results.append(
-                HeuristicGeneratePromptResult(
-                    prompt=prompt,
-                    response=response,
-                    step=step,
-                    heuristic=heuristic_code,
-                    average_destroy_rate=metric,
-                )
-            )
-        except Exception as e:
-            print(f"Invalid heuristic: {e}")
-            print(traceback.format_exc())
+        metric = evaluate_heuristic(heuristic_code, datasets)
+        if math.isnan(metric):
+            print("Invalid heuristic.")
             continue
+
+        old_results.append(
+            HeuristicGeneratePromptResult(
+                prompt=prompt,
+                response=response,
+                step=step,
+                heuristic=heuristic_code,
+                average_destroy_rate=metric,
+            )
+        )
 
         old_results.sort(key=lambda r: (r.average_destroy_rate))
 
-        print(f"step {step:3d}: average ship destroy rate: {metric}")
+        print(f"step {step:3d}: average ship destroy rate: {metric:.4f}")
 
         encoding = tiktoken.get_encoding("o200k_base")
         input_tokens = len(encoding.encode(prompt))

@@ -183,10 +183,6 @@ def get_heuristic_generator_prompt(
 
     if not detailed_table and len(example_dataset.ship_types) > 3:
         prompt += "...\n"
-        prompt += (
-            f"{len(example_dataset.ship_types)}: "
-            f"{' '.join(str(x) for x in example_dataset.require_missles[-1])}\n"
-        )
 
     prompt += textwrap.dedent(
         """
@@ -230,7 +226,7 @@ def get_heuristic_generator_prompt(
                 f"""
 ```
 {result.heuristic}```
-average ship destroy rate: {result.average_destroy_rate}
+average ship destroy rate: {result.average_destroy_rate:.4f}
 """
             )
 
@@ -240,18 +236,18 @@ average ship destroy rate: {result.average_destroy_rate}
     match method:
         case "direct":
             additional_prompt = (
-                "No other text should be included. Complete the function directly. "
-                "Do not include any explanation."
+                "Complete the function directly. Do not include any explanation."
             )
         case "chain":
-            additional_prompt = "Think step by step and show your answer."
+            additional_prompt = "Think step by step and show your implementation."
         case _:
             msg = f"Unknown prompt method: {method}"
             raise ValueError(msg)
 
     prompt += (
         "Improve the heuristic function shown below. "
-        f"Wrap your solution within a markdown code block. {additional_prompt}\n"
+        f"Wrap your solution within a markdown code block. {additional_prompt} "
+        "The code block should contain only the function definition.\n"
     )
 
     prompt += textwrap.dedent(

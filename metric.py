@@ -3,7 +3,11 @@ Evaluation metrics.
 """
 
 import concurrent.futures
-from collections.abc import Callable, Sequence
+import os
+import statistics
+from collections.abc import Sequence
+from functools import partial
+from typing import Any
 
 import numpy
 from tqdm.auto import tqdm
@@ -11,17 +15,53 @@ from tqdm.auto import tqdm
 from dataset import Dataset
 
 
-def evaluate_heuristic(
-    heuristic: Callable[[Dataset, list[float], int], int],
-    datasets: Sequence[Dataset],
-) -> float:
+def _run_single_evaluation(heuristic_code: str, dataset: Dataset) -> float:
+    namespace: dict[str, Any] = {"Dataset": Dataset}
+
+    try:
+        exec(heuristic_code, namespace)
+    except SyntaxError:
+        return float("nan")
+
+    try:
+        heuristic = namespace["heuristic"]
+    except KeyError:
+        return float("nan")
+
+    n_ship = dataset.ship_types.shape[0]
+    n_missle = len(dataset.missles)
+
+    ship_health = [1.0] * n_ship
+    assignment = []
+    for i, _ in enumerate(dataset.missles):
+        ship_id = heuristic(dataset, ship_health, i + 1)
+        if dataset.can_hit_ship(dataset.missles[i], ship_id):
+            ship_health[ship_id - 1] -= dataset.missle_damages[
+                dataset.ship_types[ship_id - 1] - 1, dataset.missles[i].type - 1
+            ].item()
+            assignment.append(ship_id)
+        else:
+            assignment.append(0)
+
+    if len(assignment) != n_missle:
+        return float("nan")
+
+    ship_health = numpy.array(ship_health)
+    ship_health[ship_health < 0] = 0
+
+    destroyed_ship = numpy.sum(numpy.array(ship_health) <= 0, dtype=numpy.int64).item()
+
+    return destroyed_ship / n_ship
+
+
+def evaluate_heuristic(heuristic_code: str, datasets: Sequence[Dataset]) -> float:
     """
     Evaluates a heuristic over a range of datasets.
 
     Parameters
     ----------
-    heuristic : Callable[[Dataset, list[float], int], int]
-        heuristic to evaluate
+    heuristic : str
+        heuristic code to evaluate
     config_low : DatasetConfig
         lower bound dataset configuration
     config_high : DatasetConfig
@@ -35,39 +75,18 @@ def evaluate_heuristic(
         average ship destroy rate
     """
 
-    def run_single_evaluation(dataset: Dataset) -> float:
-        n_ship = dataset.ship_types.shape[0]
-        n_missle = len(dataset.missles)
-
-        ship_health = [1.0] * n_ship
-        assignment = []
-        for i, _ in enumerate(dataset.missles):
-            ship_id = heuristic(dataset, ship_health, i + 1)
-            if dataset.can_hit_ship(dataset.missles[i], ship_id):
-                ship_health[ship_id - 1] -= dataset.missle_damages[
-                    dataset.ship_types[ship_id - 1] - 1, dataset.missles[i].type - 1
-                ].item()
-                assignment.append(ship_id)
-            else:
-                assignment.append(0)
-
-        if len(assignment) != n_missle:
-            return 0.0
-
-        ship_health = numpy.array(ship_health)
-        ship_health[ship_health < 0] = 0
-
-        destroyed_ship = numpy.sum(
-            numpy.array(ship_health) <= 0, dtype=numpy.int64
-        ).item()
-
-        return destroyed_ship / n_ship
+    evaluation_func = partial(_run_single_evaluation, heuristic_code)
 
     with concurrent.futures.ProcessPoolExecutor() as executor:
         destroy_rates = list(
-            tqdm(executor.map(run_single_evaluation, datasets), total=len(datasets))
+            tqdm(
+                executor.map(
+                    evaluation_func,
+                    datasets,
+                    chunksize=int(len(datasets) / (os.cpu_count() or 1)),
+                ),
+                total=len(datasets),
+            )
         )
 
-    avg_destroy_rate = float(numpy.mean(destroy_rates))
-
-    return avg_destroy_rate
+    return statistics.fmean(destroy_rates)
