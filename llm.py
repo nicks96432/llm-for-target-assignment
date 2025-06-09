@@ -38,12 +38,13 @@ def get_ai_response(
             else:
                 return response.output_text
     elif isinstance(client, genai.Client):
-        if config.model.startswith("gemini-2.5-flash"):
-            thinking_config = google.genai.types.ThinkingConfig(
-                thinking_budget=0,
-            )
-        else:
-            thinking_config = None
+        match config.model:
+            case "gemini-2.5-pro-preview-06-05":
+                thinking_config = google.genai.types.ThinkingConfig(thinking_budget=128)
+            case "gemini-2.5-flash-preview-04-17":
+                thinking_config = google.genai.types.ThinkingConfig(thinking_budget=0)
+            case _:
+                thinking_config = None
 
         while True:
             try:
@@ -79,7 +80,13 @@ def count_tokens(text: str, client: Any, model: str) -> int:
             encoding = tiktoken.encoding_for_model(model)
         return len(encoding.encode(text))
     elif isinstance(client, genai.Client):
-        return client.models.count_tokens(model=model, contents=text).total_tokens or 0
+        try:
+            return (
+                client.models.count_tokens(model=model, contents=text).total_tokens or 0
+            )
+        except google.genai.errors.APIError as e:
+            print(getattr(e, "message", str(e)))
+            return 0
 
     msg = f"Unknown client type: {type(client)}"
     raise ValueError(msg)

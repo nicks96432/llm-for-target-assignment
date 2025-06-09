@@ -83,6 +83,9 @@ class HeuristicGenerationConfig(BaseModel):
     n_dataset: int = Field(
         default=1000, title="number of evaluation datasets to generate"
     )
+    timeout: float = Field(
+        default=30.0, title="timeout for one evaluation step in seconds"
+    )
 
     gumbel_tau: float = Field(default=1.0, title="gumbel sampling temperature")
     damage_factor: float = Field(

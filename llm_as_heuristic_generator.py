@@ -178,12 +178,16 @@ average ship destroy rate: {metric}"""
 
         heuristic_code = extract_heuristic_code(response)  # type: ignore
         if not heuristic_code:
-            print("Invalid heuristic.")
+            print("cannot find heuristic code in response")
+            continue
+        try:
+            metric = evaluate_heuristic(heuristic_code, datasets, config.timeout)
+        except TimeoutError:
+            print("heuristic evaluation timeout")
             continue
 
-        metric = evaluate_heuristic(heuristic_code, datasets)
         if math.isnan(metric):
-            print("Invalid heuristic.")
+            print(f"invalid heuristic:\n{heuristic_code}")
             continue
 
         old_results.append(
