@@ -139,7 +139,7 @@ average ship destroy rate: {metric}"""
         return
 
     run = wandb.init(
-        project="target-assignment-llm-algorithm-generator",
+        project="target-assignment-llm-heuristic-generator",
         config={
             "init_heuristics": [result.heuristic for result in old_results],
             "init_average_destroy_rate": [
