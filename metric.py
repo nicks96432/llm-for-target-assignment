@@ -17,6 +17,7 @@ from dataset import Dataset
 
 def _run_single_evaluation(heuristic_code: str, dataset: Dataset) -> float:
     namespace: dict[str, Any] = {"Dataset": Dataset, "numpy": numpy, "np": numpy}
+    numpy.seterr(all="raise")
 
     try:
         exec(heuristic_code, namespace)

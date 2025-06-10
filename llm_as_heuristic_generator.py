@@ -39,10 +39,17 @@ def extract_heuristic_code(string: str) -> str:
 
     parts = string.rsplit("```", 2)
 
-    if len(parts) >= 2:
-        return parts[-2].partition("\n")[2]
+    if len(parts) < 3:
+        return ""
 
-    return ""
+    code = parts[-2].partition("\n")[2]
+
+    parts = code.partition("def heuristic(")
+
+    if len(parts) < 2:
+        return ""
+
+    return parts[1] + parts[2]
 
 
 def heuristic(dataset: Dataset, ship_health: list[float], i: int) -> int:
