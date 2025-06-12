@@ -1,7 +1,6 @@
 import argparse
 import dataclasses
 import json
-import os
 from collections.abc import Sequence
 from functools import partial
 
@@ -10,6 +9,7 @@ import openai
 import wandb
 from google import genai
 
+from config import OptimizationConfig
 from dataset import Dataset, Missle
 from llm import count_tokens, get_ai_response
 from prompt import OptimizePromptResult, get_optimizer_prompt, get_sample_method
@@ -126,18 +126,18 @@ def init_nearest_first(dataset: Dataset) -> list[OptimizePromptResult]:
     return [result]
 
 
-def main(args: dict):
-    dataset = Dataset.load_dir(args["data_dir"])
+def main(config: OptimizationConfig):
+    dataset = Dataset.load_dir(config.prompt.example_dataset_dir)
 
-    rng = numpy.random.default_rng(args["seed"])
+    rng = numpy.random.default_rng(config.seed)
 
-    match args["init_method"]:
+    match config.init_method:
         case "random":
-            init_assignments = init_random(dataset, args["n_init_assignment"])
+            init_assignments = init_random(dataset, config.n_init_assignment)
         case "nearest_first":
             init_assignments = init_nearest_first(dataset)
         case _:
-            msg = f"Unknown init method: {args['init_method']}"
+            msg = f"Unknown init method: {config.init_method}"
             raise ValueError(msg)
 
     old_results = init_assignments
@@ -149,16 +149,16 @@ def main(args: dict):
         )
 
     sample_func = get_sample_method(
-        rng, args["sample_method"], args["n_example"], args["gumbel_tau"]
+        rng, config.prompt.sample_method, config.prompt.n_example, config.gumbel_tau
     )
 
     get_prompt = partial(
         get_optimizer_prompt,
-        method=args["prompt_method"],
-        include_damage=args["prompt_include_damage"],
+        method=config.prompt.method,
+        include_damage=config.prompt.include_damage,
     )
 
-    if args["debug"]:
+    if config.debug:
         print("----------------------------prompt------------------------------")
         print(get_prompt(old_results, dataset))
         print("----------------------------------------------------------------")
@@ -172,7 +172,7 @@ def main(args: dict):
             "init_prompt": get_prompt(old_results, dataset),
             "n_missle": len(dataset.missles),
             "n_ship": len(dataset.ships_xy),
-            **args,
+            **config.model_dump(),
         },
     )
     run.define_metric("destroyed_ships", summary="max")
@@ -180,31 +180,31 @@ def main(args: dict):
 
     step = 0
 
-    match args["model_provider"]:
+    match config.llm.provider:
         case "openai":
-            client = openai.OpenAI(api_key=args["openai_api_key"])
-        case "google":
-            client = genai.Client(api_key=args["google_api_key"])
+            client_cls = openai.OpenAI
+        case "genai":
+            client_cls = genai.Client
         case _:
-            msg = f"Unknown model provider: {args['model_provider']}"
+            msg = f"Unknown model provider: {config.llm.provider}"
             raise ValueError(msg)
+
+    client = client_cls(api_key=config.llm.api_key)
 
     api_called_count = 0
     total_input_tokens, total_output_tokens = 0, 0
-    while step < args["n_step"]:
+    while step < config.n_step:
         examples: list[OptimizePromptResult] = sample_func(old_results)  # type: ignore
         prompt = get_prompt(examples, dataset)
         response = get_ai_response(
-            prompt,
-            args["model"],
             client,
-            args["temperature"],
-            args["max_output_tokens"],
+            prompt,
+            config.llm,
             metadata={"step": str(step), "run-name": run.name},
         )
 
-        input_tokens = count_tokens(prompt, client, args["model"])
-        output_tokens = count_tokens(response, client, args["model"])
+        input_tokens = count_tokens(prompt, client, config.llm.model)
+        output_tokens = count_tokens(response, client, config.llm.model)
         api_called_count += 1
         total_input_tokens += input_tokens
         total_output_tokens += output_tokens
@@ -279,90 +279,12 @@ def main(args: dict):
 
 
 if __name__ == "__main__":
-    argparser = argparse.ArgumentParser()
-    argparser.add_argument(
-        "--debug", action="store_true", default=False, help="print init prompt"
-    )
-    argparser.add_argument(
-        "--data-dir", type=str, required=True, help="path to data directory"
-    )
-    argparser.add_argument(
-        "--n-init-assignment", type=int, default=3, help="number of initial assignments"
-    )
-    argparser.add_argument(
-        "--init-method",
-        choices=["random", "nearest_first"],
-        default="random",
-        help="method for initializing example assignments",
-    )
-    argparser.add_argument(
-        "--n-step", type=int, default=250, help="number of optimization steps"
-    )
-    argparser.add_argument(
-        "--n-example",
-        type=int,
-        default=6,
-        help="number of example assignments in prompt",
-    )
-    argparser.add_argument(
-        "--sample-method",
-        choices=["best", "uniform", "gumbel_top_k"],
-        default="best",
-        help="method for sampling example assignments",
-    )
-    argparser.add_argument(
-        "--gumbel-tau", type=float, default=1.0, help="temperature for gumbel sampling"
-    )
-    argparser.add_argument(
-        "--damage-factor",
-        type=float,
-        default=0.1,
-        help="how much to weigh damage contributions in gumbel sampling",
-    )
-    argparser.add_argument(
-        "--temperature", type=float, default=1.5, help="temperature for LLM"
-    )
-    argparser.add_argument(
-        "--seed", type=int, default=0, help="seed for init assignments and model"
-    )
-    argparser.add_argument(
-        "--model", type=str, default="gpt-4.1-mini", help="model name"
-    )
-    argparser.add_argument(
-        "--model-provider",
-        choices=["openai", "google"],
-        default="openai",
-        help="model provider",
-    )
-    argparser.add_argument(
-        "--openai-api-key",
-        type=str,
-        default=os.environ["OPENAI_API_KEY"],
-        help="OpenAI API key",
-    )
-    argparser.add_argument(
-        "--google-api-key",
-        type=str,
-        default=os.environ["GOOGLE_API_KEY"],
-        help="Google API key",
-    )
+    parser = argparse.ArgumentParser()
 
-    argparser.add_argument(
-        "--prompt-method",
-        choices=["direct", "chain"],
-        default="direct",
-        help="prompt method",
-    )
-    argparser.add_argument(
-        "--prompt-include-damage",
-        action="store_true",
-        default=False,
-        help="include total damage in prompt",
-    )
-    argparser.add_argument(
-        "--max-output-tokens", type=int, default=256, help="max output tokens"
-    )
+    parser.add_argument("config_file", type=str, help="Config file path")
+    config_file = parser.parse_args().config_file
 
-    args = argparser.parse_args()
+    with open(config_file, encoding="utf-8") as f:
+        config = OptimizationConfig.model_validate_json(f.read())
 
-    main(vars(args))
+    main(config)

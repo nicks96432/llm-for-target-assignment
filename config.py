@@ -19,6 +19,11 @@ class SampleMethod(StrEnum):
     GUMBEL_TOP_K = "gumbel_top_k"
 
 
+class InitMethod(StrEnum):
+    NEAREST_FIRST = "nearest_first"
+    RANDOM = "random"
+
+
 class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -65,6 +70,21 @@ class PromptConfig(BaseModel):
     detailed_table: bool = Field(default=False, title="use detailed table prompt")
 
 
+class OptimizationPromptConfig(PromptConfig):
+    model_config = ConfigDict(frozen=True)
+
+    init_method: InitMethod = Field(default=InitMethod.RANDOM, title="init method")
+    include_damage: bool = Field(default=False, title="include total damage in prompt")
+    n_init_assignment: int = Field(default=3, title="number of initial assignments")
+
+
+class HeuristicGenerationPromptConfig(PromptConfig):
+    model_config = ConfigDict(frozen=True)
+
+    example_dataset_dir: str = Field(title="example dataset directory")
+    detailed_table: bool = Field(default=False, title="use detailed table prompt")
+
+
 DATASET_GEN_DEFAULT_LOW = DatasetConfig.model_construct(
     n_ship=10, n_turret=10, n_missle=50, n_ship_type=10, n_missle_type=2
 )
@@ -100,4 +120,26 @@ class HeuristicGenerationConfig(BaseModel):
         default=DATASET_GEN_DEFAULT_HIGH, title="dataset generation upper bound"
     )
 
-    prompt: PromptConfig
+    prompt: HeuristicGenerationPromptConfig
+
+
+class OptimizationConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    debug: bool = Field(default=False, title="print init prompt and exit")
+
+    seed: int = Field(default=0, title="seed for init datasets and model")
+    n_step: int = Field(default=25, title="number of steps")
+    init_method: InitMethod = Field(default=InitMethod.RANDOM, title="init method")
+    n_init_assignment: int = Field(default=1000, title="number of initial assignments")
+    timeout: float = Field(
+        default=30.0, title="timeout for one evaluation step in seconds"
+    )
+
+    gumbel_tau: float = Field(default=1.0, title="gumbel sampling temperature")
+    damage_factor: float = Field(
+        default=0.1, title="how much to weigh damage contributions in gumbel sampling"
+    )
+
+    llm: LLMConfig
+    prompt: OptimizationPromptConfig
